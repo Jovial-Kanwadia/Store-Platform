@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -31,40 +32,52 @@ type StoreReconciler struct {
 // +kubebuilder:rbac:groups=infra.store.io,resources=stores/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infra.store.io,resources=stores/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods;services;events;persistentvolumeclaims;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services;pods;persistentvolumeclaims;secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="networking.k8s.io",resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 
 func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var store infrav1alpha1.Store
 	if err := r.Get(ctx, req.NamespacedName, &store); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	nsName := fmt.Sprintf("store-%s", store.Name)
+	releaseName := store.Name
 
-	// --- DELETE FLOW ---
+	// 1. DELETE LOGIC
 	if !store.DeletionTimestamp.IsZero() {
 		if containsString(store.Finalizers, storeFinalizer) {
-			logger.Info("handling deletion", "store", store.Name)
-			var ns corev1.Namespace
-			err := r.Get(ctx, types.NamespacedName{Name: nsName}, &ns)
-			if err == nil {
-				// trigger deletion (idempotent)
-				if delErr := r.Delete(ctx, &ns); delErr != nil && !apierrors.IsNotFound(delErr) {
-					return ctrl.Result{}, delErr
+			logger.Info("Deleting Store resources...", "store", store.Name)
+
+			// A. Uninstall Helm Release
+			if err := helm.UninstallRelease(ctrl.GetConfigOrDie(), releaseName, nsName); err != nil {
+				logger.Error(err, "Helm uninstall failed")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			// B. Delete PVCs (Clean up storage)
+			var pvcList corev1.PersistentVolumeClaimList
+			if err := r.List(ctx, &pvcList, &client.ListOptions{Namespace: nsName}); err == nil {
+				for _, pvc := range pvcList.Items {
+					_ = r.Delete(ctx, &pvc)
 				}
-				// wait for namespace to disappear
+			}
+
+			// C. Delete Namespace
+			var ns corev1.Namespace
+			if err := r.Get(ctx, types.NamespacedName{Name: nsName}, &ns); err == nil {
+				if err := r.Delete(ctx, &ns); err != nil {
+					return ctrl.Result{}, err
+				}
+				// Wait for namespace to actually vanish
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
-			if !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-			// namespace gone → remove finalizer
+
+			// D. Remove Finalizer
 			store.Finalizers = removeString(store.Finalizers, storeFinalizer)
 			if err := r.Update(ctx, &store); err != nil {
 				return ctrl.Result{}, err
@@ -73,89 +86,123 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// --- CREATE / UPDATE FLOW ---
-
-	// ensure finalizer
+	// 2. CREATE/UPDATE LOGIC
+	// A. Add Finalizer
 	if !containsString(store.Finalizers, storeFinalizer) {
 		store.Finalizers = append(store.Finalizers, storeFinalizer)
 		if err := r.Update(ctx, &store); err != nil {
 			return ctrl.Result{}, err
 		}
-		// requeue to see new finalizer
-		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
-	// ensure namespace exists
+	// B. Ensure Namespace
 	var ns corev1.Namespace
 	if err := r.Get(ctx, types.NamespacedName{Name: nsName}, &ns); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("creating namespace", "namespace", nsName)
-			ns = corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: nsName,
-				},
-			}
+			ns = corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 			if err := r.Create(ctx, &ns); err != nil {
 				return ctrl.Result{}, err
 			}
-			// requeue to allow namespace objects to be created
 			return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	// chart path via env var (required)
-	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
-	if chartPath == "" {
-		return ctrl.Result{}, fmt.Errorf("WORDPRESS_CHART_PATH not set in operator environment")
+	// C. Apply Guardrails (Quota, Limits, NetPol)
+	if err := r.ensureQuota(ctx, nsName, store.Spec.Plan); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.ensureLimitRange(ctx, nsName); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.ensureNetworkPolicy(ctx, nsName); err != nil {
+		return ctrl.Result{}, err
 	}
 
-	releaseName := store.Name
+	// D. Determine Chart Path
+	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
+	if chartPath == "" {
+		// Fallback for local dev
+		chartPath = "/Users/zora/programming/store-platform/operator/charts/wordpress"
+	}
+
+	// E. Prepare Values
 	values := map[string]interface{}{
 		"wordpressBlogName": store.Name,
-		// Fix the Networking Issue
-		"service": map[string]interface{}{
-			"type": "ClusterIP",
-		},
-		// Enable Ingress (So you can actually access it via nip.io)
+		"service":           map[string]interface{}{"type": "ClusterIP"},
 		"ingress": map[string]interface{}{
 			"enabled":          true,
 			"ingressClassName": "nginx",
 			"hostname":         fmt.Sprintf("%s.127.0.0.1.nip.io", store.Name),
 		},
+		"volumePermissions": map[string]interface{}{"enabled": false},
+
+		// 1. Disable Persistence (Critical for Kind/Local speed)
+		"persistence": map[string]interface{}{
+			"enabled": false,
+		},
+		"mariadb": map[string]interface{}{
+			"primary": map[string]interface{}{
+				"persistence": map[string]interface{}{
+					"enabled": false,
+				},
+			},
+		},
+
+		// 2. Relax Probes (Critical for slow laptops)
+		// Give WordPress 2 minutes to start before Kubernetes kills it
+		"livenessProbe": map[string]interface{}{
+			"initialDelaySeconds": 120,
+			"periodSeconds":       20,
+		},
+		"readinessProbe": map[string]interface{}{
+			"initialDelaySeconds": 60,
+			"periodSeconds":       10,
+		},
 	}
 
-	// set status to Provisioning if not set
-	if store.Status.Phase == "" || store.Status.Phase == "Failed" {
+	// F. Install/Upgrade Helm
+	if store.Status.Phase == "" {
 		store.Status.Phase = "Provisioning"
-		if err := r.Status().Update(ctx, &store); err != nil {
-			return ctrl.Result{}, err
-		}
-		// let next reconcile attempt run helm
-		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+		r.Status().Update(ctx, &store)
 	}
 
-	// Perform Helm install/upgrade using in-cluster config
 	if err := helm.InstallOrUpgrade(ctx, ctrl.GetConfigOrDie(), releaseName, nsName, chartPath, values); err != nil {
-		logger.Error(err, "helm install/upgrade failed", "release", releaseName, "namespace", nsName)
-		// set status to Failed and include short message (avoid long errors in status)
+		logger.Error(err, "Helm install failed")
 		store.Status.Phase = "Failed"
-		if err2 := r.Status().Update(ctx, &store); err2 != nil {
-			logger.Error(err2, "failed to update status after helm failure")
-		}
-		// requeue after a backoff to allow transient issues to recover
+		r.Status().Update(ctx, &store)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
-	// success → Ready
+	// G. Verify Readiness (Probe URL)
+	storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
+	if err := r.probeURL(ctx, storeURL); err != nil {
+		logger.Info("Waiting for Store URL...", "url", storeURL)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// H. Success!
 	if store.Status.Phase != "Ready" {
 		store.Status.Phase = "Ready"
-		if err := r.Status().Update(ctx, &store); err != nil {
-			return ctrl.Result{}, err
-		}
+		store.Status.URL = storeURL
+		r.Status().Update(ctx, &store)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// probeURL tries to hit the URL. Returns nil if 200 OK.
+func (r *StoreReconciler) probeURL(ctx context.Context, url string) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		return nil
+	}
+	return fmt.Errorf("status code %d", resp.StatusCode)
 }
 
 func containsString(slice []string, s string) bool {

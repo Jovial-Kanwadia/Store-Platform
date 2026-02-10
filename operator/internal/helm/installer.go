@@ -50,7 +50,7 @@ func InstallOrUpgrade(
 		fmt.Printf("Helm: Release %s exists, upgrading...\n", releaseName)
 		upgrade := action.NewUpgrade(actionConfig)
 		upgrade.Namespace = namespace
-		upgrade.Wait = true
+		upgrade.Wait = false
 		upgrade.Timeout = 5 * time.Minute
 		_, err := upgrade.Run(releaseName, chart, values)
 		return err
@@ -61,7 +61,7 @@ func InstallOrUpgrade(
 	install := action.NewInstall(actionConfig)
 	install.Namespace = namespace
 	install.ReleaseName = releaseName
-	install.Wait = true
+	install.Wait = false
 	install.Timeout = 5 * time.Minute
 	_, err = install.Run(chart, values)
 	return err
