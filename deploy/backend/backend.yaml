@@ -1,0 +1,94 @@
+# 1. Service Account (Identity)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backend-sa
+  namespace: default
+---
+# 2. ClusterRole (Permissions - Crucial for a Platform)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backend-role
+rules:
+  # Allow managing Stores (The core job of the backend)
+  - apiGroups: ["infra.store.io"]
+    resources: ["stores"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+---
+# 3. Binding (Connecting Identity to Permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backend-binding
+subjects:
+  - kind: ServiceAccount
+    name: backend-sa
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: backend-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# 4. Deployment (The Workload)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-backend
+  namespace: default
+spec:
+  replicas: 2  # Scalability: Run 2 copies to prove statelessness
+  selector:
+    matchLabels:
+      app: store-backend
+  template:
+    metadata:
+      labels:
+        app: store-backend
+    spec:
+      serviceAccountName: backend-sa
+      containers:
+        - name: api
+          image: store-backend:v1
+          imagePullPolicy: IfNotPresent # Use the local image we loaded
+          ports:
+            - containerPort: 8080
+          env:
+            - name: REDIS_ADDR
+              value: "redis:6379" # Connects to the Service defined in Step 3
+            - name: ENV
+              value: "production"
+            - name: LISTEN_ADDR
+              value: ":8080"
+          # Production Readiness: Probes
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+---
+# 5. Service (Internal Networking)
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-backend
+  namespace: default
+spec:
+  selector:
+    app: store-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
