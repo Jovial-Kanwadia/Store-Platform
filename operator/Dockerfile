@@ -27,7 +27,8 @@ FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
 # Copy Helm charts so the operator can install them at runtime
-COPY charts/ /charts/
+COPY charts/engine-woo /charts/engine-woo
+ENV WORDPRESS_CHART_PATH=/charts/engine-woo
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

@@ -126,8 +126,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// D. Determine Chart Path
 	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
 	if chartPath == "" {
-		// Fallback for local dev
-		chartPath = "/Users/zora/programming/store-platform/operator/charts/wordpress"
+		chartPath = "../charts/engine-woo"
 	}
 
 	// E. Prepare Values

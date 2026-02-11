@@ -1,6 +1,10 @@
 apiVersion: v2
 name: engine-woo
-description: WooCommerce Store Engine (WordPress + MySQL)
+description: A wrapper chart for WooCommerce
 type: application
 version: 0.1.0
-appVersion: "6.4"
+appVersion: "1.0.0"
+dependencies:
+  - name: wordpress
+    version: 19.1.5
+    repository: https://charts.bitnami.com/bitnami
