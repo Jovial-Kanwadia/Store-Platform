@@ -5,7 +5,7 @@ set -euo pipefail
 
 API="${API_URL:-http://localhost:8080}"
 STORE_NAME="e2e-test-$(date +%s)"
-TIMEOUT=400
+TIMEOUT=200
 POLL_INTERVAL=5
 
 cleanup() {
