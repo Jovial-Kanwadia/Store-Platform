@@ -37,13 +37,13 @@ jobs:
           ls -R charts/
 
           # Create the destination directory inside operator
-          mkdir -p operator/charts/wordpress
+          mkdir -p operator/charts/engine-woo
 
           # Copy the engine-woo chart (which is your WordPress chart) 
           # to where the operator expects it
           if [ -d "charts/engine-woo" ]; then
             echo "Copying engine-woo to operator/charts/wordpress..."
-            cp -r charts/engine-woo/* operator/charts/wordpress/
+            cp -r charts/engine-woo/* operator/charts/engine-woo/
           else
             echo "::error::charts/engine-woo not found at root!"
             exit 1
