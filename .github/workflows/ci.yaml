@@ -78,7 +78,8 @@ jobs:
       - name: Run E2E Tests
         run: |
           # Forward the ingress controller so nip.io hostnames resolve
-          kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80 &
+          kubectl port-forward svc/store-backend 8080:80 &
+          kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8081:80 &
           # Give it a moment to connect
           sleep 10
           chmod +x test/e2e.sh
