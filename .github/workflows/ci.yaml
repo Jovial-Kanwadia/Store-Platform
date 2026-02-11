@@ -28,6 +28,8 @@ jobs:
 
       - name: Create Kind Cluster
         uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
 
       - name: Build Docker Images
         run: |
