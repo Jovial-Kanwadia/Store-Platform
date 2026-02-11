@@ -15,7 +15,17 @@ rules:
     resources: ["stores", "stores/status", "stores/finalizers"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: [""]
-    resources: ["namespaces", "services", "pods", "events", "persistentvolumeclaims", "secrets", "configmaps", "resourcequotas", "limitranges"]
+    resources:
+      - namespaces
+      - services
+      - pods
+      - events
+      - persistentvolumeclaims
+      - secrets
+      - configmaps
+      - resourcequotas
+      - limitranges
+      - serviceaccounts
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
@@ -25,6 +35,11 @@ rules:
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
 ---
 # 3. ClusterRoleBinding
