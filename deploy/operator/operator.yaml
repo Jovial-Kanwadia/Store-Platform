@@ -61,7 +61,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: WORDPRESS_CHART_PATH
-              value: "/charts/wordpress"
+              value: "/charts/engine-woo"
           resources:
             limits:
               cpu: 200m
