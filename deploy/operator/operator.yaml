@@ -23,6 +23,9 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies", "ingresses"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
 ---
 # 3. ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
