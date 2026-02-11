@@ -26,30 +26,29 @@ jobs:
           working-directory: backend
           args: --timeout=5m
 
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
       - name: Create Kind Cluster
         uses: helm/kind-action@v1
         with:
           cluster_name: kind
 
+      - name: Install Ingress NGINX
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          helm install ingress-nginx ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx --create-namespace \
+            --wait --timeout 5m
+
       - name: Prepare Operator Build Context
         run: |
-          echo "Current directory: $(pwd)"
-          ls -R charts/
+          # Download the bitnami/wordpress subchart
+          helm dependency build charts/engine-woo
 
-          # Create the destination directory inside operator
           mkdir -p operator/charts/engine-woo
-
-          # Copy the engine-woo chart (which is your WordPress chart) 
-          # to where the operator expects it
-          if [ -d "charts/engine-woo" ]; then
-            echo "Copying engine-woo to operator/charts/wordpress..."
-            cp -r charts/engine-woo/* operator/charts/engine-woo/
-          else
-            echo "::error::charts/engine-woo not found at root!"
-            exit 1
-          fi
-          
-          # Verify the copy worked
+          cp -r charts/engine-woo/* operator/charts/engine-woo/
           ls -R operator/charts/
 
       - name: Build Docker Images
@@ -78,10 +77,10 @@ jobs:
 
       - name: Run E2E Tests
         run: |
-          # Start the tunnel in the background
-          kubectl port-forward svc/store-backend 8080:80 &
+          # Forward the ingress controller so nip.io hostnames resolve
+          kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80 &
           # Give it a moment to connect
-          sleep 5
+          sleep 10
           chmod +x test/e2e.sh
           
           # Run the test. If it fails, run the logging commands.
