@@ -33,15 +33,24 @@ jobs:
 
       - name: Prepare Operator Build Context
         run: |
-          # The Dockerfile runs inside 'operator/', so it can't see 'charts/' at the root.
-          # We must copy them in first.
-          if [ -d "charts" ]; then
-            echo "Copying charts from root to operator directory..."
-            cp -r charts operator/
+          echo "Current directory: $(pwd)"
+          ls -R charts/
+
+          # Create the destination directory inside operator
+          mkdir -p operator/charts/wordpress
+
+          # Copy the engine-woo chart (which is your WordPress chart) 
+          # to where the operator expects it
+          if [ -d "charts/engine-woo" ]; then
+            echo "Copying engine-woo to operator/charts/wordpress..."
+            cp -r charts/engine-woo/* operator/charts/wordpress/
           else
-            echo "::error::Charts directory not found at root!"
+            echo "::error::charts/engine-woo not found at root!"
             exit 1
           fi
+          
+          # Verify the copy worked
+          ls -R operator/charts/
 
       - name: Build Docker Images
         run: |
