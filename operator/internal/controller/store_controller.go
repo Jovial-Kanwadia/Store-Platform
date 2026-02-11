@@ -196,7 +196,8 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// G. Verify Readiness (Probe URL)
 	storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
-	if err := r.probeURL(ctx, storeURL); err != nil {
+	internalURL := fmt.Sprintf("http://%s-wordpress.%s.svc.cluster.local", releaseName, nsName)
+	if err := r.probeURL(ctx, internalURL); err != nil {
 		logger.Info("Waiting for Store URL...", "url", storeURL)
 		store.Status.Message = "Waiting for store to become ready..."
 		store.Status.Reason = "WaitingForPods"
