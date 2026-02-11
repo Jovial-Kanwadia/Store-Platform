@@ -44,7 +44,7 @@ jobs:
 
       - name: Prepare Operator Build Context
         run: |
-          # Download the bitnami/wordpress subchart
+          helm repo add bitnami https://charts.bitnami.com/bitnami
           helm dependency build charts/engine-woo
 
           mkdir -p operator/charts/engine-woo
