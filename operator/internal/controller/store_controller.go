@@ -170,7 +170,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		store.Status.Phase = "Provisioning"
 		store.Status.Message = "Started provisioning store"
 		store.Status.Reason = "Provisioning"
-		r.Status().Update(ctx, &store)
+		if err := r.Status().Update(ctx, &store); err != nil {
+			logger.Error(err, "unable to update Store status")
+			return ctrl.Result{}, err
+		}
+
 		r.Recorder.Event(&store, corev1.EventTypeNormal, "Provisioning", fmt.Sprintf("Started provisioning store %s", store.Name))
 		storeCreatedTotal.Inc()
 	}
@@ -182,7 +186,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		store.Status.Phase = "Failed"
 		store.Status.Message = fmt.Sprintf("Helm install failed: %v", err)
 		store.Status.Reason = "HelmError"
-		r.Status().Update(ctx, &store)
+		if err := r.Status().Update(ctx, &store); err != nil {
+			logger.Error(err, "unable to update Store status")
+			return ctrl.Result{}, err
+		}
+
 		r.Recorder.Eventf(&store, corev1.EventTypeWarning, "Failed", "Installation failed: %v", err)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
@@ -193,7 +201,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		logger.Info("Waiting for Store URL...", "url", storeURL)
 		store.Status.Message = "Waiting for store to become ready..."
 		store.Status.Reason = "WaitingForPods"
-		r.Status().Update(ctx, &store)
+		if err := r.Status().Update(ctx, &store); err != nil {
+			logger.Error(err, "unable to update Store status")
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -203,7 +215,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		store.Status.URL = storeURL
 		store.Status.Message = ""
 		store.Status.Reason = ""
-		r.Status().Update(ctx, &store)
+		if err := r.Status().Update(ctx, &store); err != nil {
+			logger.Error(err, "unable to update Store status")
+			return ctrl.Result{}, err
+		}
+
 		r.Recorder.Eventf(&store, corev1.EventTypeNormal, "Ready", "Store is ready at URL %s", storeURL)
 		storeProvisioningSeconds.Observe(time.Since(provisionStart).Seconds())
 	}
@@ -218,7 +234,7 @@ func (r *StoreReconciler) probeURL(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 		return nil
 	}
