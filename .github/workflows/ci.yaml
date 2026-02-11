@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   e2e-test:
     name: Build & E2E Test
@@ -45,11 +49,35 @@ jobs:
       - name: Prepare Operator Build Context
         run: |
           helm repo add bitnami https://charts.bitnami.com/bitnami
+          # This downloads the dependencies (WordPress) into charts/engine-woo/charts/
           helm dependency build charts/engine-woo
 
+          # Copy to Operator context (for the local Docker build)
           mkdir -p operator/charts/engine-woo
           cp -r charts/engine-woo/* operator/charts/engine-woo/
           ls -R operator/charts/
+
+      - name: Publish Helm Charts to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          # OCI requires lowercase repository names. 
+          # We convert the owner (e.g., Jovial-Kanwadia) to lowercase (jovial-kanwadia).
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          # 1. Login to GitHub Container Registry
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # 2. Package the Chart
+          # (Dependencies were already built in the previous step)
+          helm package charts/engine-woo --destination .cr-release-packages
+
+          # 3. Push to GHCR
+          for pkg in .cr-release-packages/*.tgz; do
+            if [ -z "${pkg}" ]; then continue; fi
+            echo "Pushing ${pkg} to oci://ghcr.io/${OWNER_LC}/charts"
+            helm push "${pkg}" oci://ghcr.io/${OWNER_LC}/charts
+          done
+          cp .cr-release-packages/engine-woo-*.tgz operator/
 
       - name: Build Docker Images
         run: |
