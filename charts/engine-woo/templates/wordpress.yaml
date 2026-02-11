@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-wordpress
+  labels:
+    app: {{ .Release.Name }}-wordpress
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: {{ .Release.Name }}-wordpress
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-wordpress
+  labels:
+    app: {{ .Release.Name }}-wordpress
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-wordpress
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-wordpress
+    spec:
+      containers:
+        - image: {{ .Values.wordpress.image }}
+          name: wordpress
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: {{ .Release.Name }}-mysql
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.mysql.username }}
+            - name: WORDPRESS_DB_PASSWORD
+              value: {{ .Values.mysql.password }}
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.mysql.database }}
+          ports:
+            - containerPort: 80
+              name: wordpress
+          volumeMounts:
+            - name: wordpress-persistent-storage
+              mountPath: /var/www/html
+      volumes:
+        - name: wordpress-persistent-storage
+          emptyDir: {} # For production, change to PersistentVolumeClaim
