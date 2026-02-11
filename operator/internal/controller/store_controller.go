@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -25,7 +26,8 @@ const storeFinalizer = "infra.store.io/finalizer"
 // StoreReconciler reconciles a Store object
 type StoreReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=infra.store.io,resources=stores,verbs=get;list;watch;create;update;patch;delete
@@ -52,10 +54,12 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !store.DeletionTimestamp.IsZero() {
 		if containsString(store.Finalizers, storeFinalizer) {
 			logger.Info("Deleting Store resources...", "store", store.Name)
+			storeDeletionTotal.Inc()
 
 			// A. Uninstall Helm Release
 			if err := helm.UninstallRelease(ctrl.GetConfigOrDie(), releaseName, nsName); err != nil {
 				logger.Error(err, "Helm uninstall failed")
+				r.Recorder.Eventf(&store, corev1.EventTypeWarning, "DeleteFailed", "Helm uninstall failed: %v", err)
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
@@ -164,13 +168,22 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// F. Install/Upgrade Helm
 	if store.Status.Phase == "" {
 		store.Status.Phase = "Provisioning"
+		store.Status.Message = "Started provisioning store"
+		store.Status.Reason = "Provisioning"
 		r.Status().Update(ctx, &store)
+		r.Recorder.Event(&store, corev1.EventTypeNormal, "Provisioning", fmt.Sprintf("Started provisioning store %s", store.Name))
+		storeCreatedTotal.Inc()
 	}
+
+	provisionStart := store.CreationTimestamp.Time
 
 	if err := helm.InstallOrUpgrade(ctx, ctrl.GetConfigOrDie(), releaseName, nsName, chartPath, values); err != nil {
 		logger.Error(err, "Helm install failed")
 		store.Status.Phase = "Failed"
+		store.Status.Message = fmt.Sprintf("Helm install failed: %v", err)
+		store.Status.Reason = "HelmError"
 		r.Status().Update(ctx, &store)
+		r.Recorder.Eventf(&store, corev1.EventTypeWarning, "Failed", "Installation failed: %v", err)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
@@ -178,6 +191,9 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
 	if err := r.probeURL(ctx, storeURL); err != nil {
 		logger.Info("Waiting for Store URL...", "url", storeURL)
+		store.Status.Message = "Waiting for store to become ready..."
+		store.Status.Reason = "WaitingForPods"
+		r.Status().Update(ctx, &store)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -185,7 +201,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if store.Status.Phase != "Ready" {
 		store.Status.Phase = "Ready"
 		store.Status.URL = storeURL
+		store.Status.Message = ""
+		store.Status.Reason = ""
 		r.Status().Update(ctx, &store)
+		r.Recorder.Eventf(&store, corev1.EventTypeNormal, "Ready", "Store is ready at URL %s", storeURL)
+		storeProvisioningSeconds.Observe(time.Since(provisionStart).Seconds())
 	}
 
 	return ctrl.Result{}, nil

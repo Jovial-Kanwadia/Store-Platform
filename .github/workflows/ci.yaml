@@ -1,0 +1,61 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e-test:
+    name: Build & E2E Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Lint Backend
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: backend
+          args: --timeout=5m
+
+      - name: Create Kind Cluster
+        uses: helm/kind-action@v1
+
+      - name: Build Docker Images
+        run: |
+          docker build -t store-backend:v1 backend/
+          docker build -t store-operator:v1 operator/
+
+      - name: Load Images into Kind
+        run: |
+          kind load docker-image store-backend:v1
+          kind load docker-image store-operator:v1
+
+      - name: Deploy Platform
+        run: |
+          kubectl apply -f deploy/crds/
+          kubectl apply -f deploy/redis/
+          kubectl apply -f deploy/backend/
+          kubectl apply -f deploy/operator/
+
+          echo "Waiting for pods..."
+          kubectl wait --for=condition=ready pod -l app=redis --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=store-backend --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=store-operator --timeout=120s
+
+          kubectl get pods -A
+
+      - name: Run E2E Tests
+        run: |
+          kubectl port-forward svc/store-backend 8080:80 &
+          sleep 5
+          chmod +x test/e2e.sh
+          ./test/e2e.sh

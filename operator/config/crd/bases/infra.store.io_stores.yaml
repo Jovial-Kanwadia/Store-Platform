@@ -53,8 +53,7 @@ spec:
             description: status defines the observed state of Store
             properties:
               conditions:
-                description: Conditions store the detailed state history (optional
-                  but recommended to keep)
+                description: Conditions store the detailed state history
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -110,9 +109,20 @@ spec:
                   - type
                   type: object
                 type: array
+              message:
+                description: Message is a human-readable description of the current
+                  state
+                type: string
               phase:
+                description: Phase is the current lifecycle phase (Provisioning, Ready,
+                  Failed)
+                type: string
+              reason:
+                description: Reason is a machine-readable reason code for the current
+                  phase
                 type: string
               url:
+                description: URL is the external endpoint for the store
                 type: string
             type: object
         required:

@@ -9,7 +9,11 @@ import (
 	"github.com/Jovial-Kanwadia/store-platform/backend/internal/domain"
 )
 
-var dnsNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+var (
+	dnsNameRegex   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	allowedPlans   = map[string]bool{"small": true, "medium": true}
+	allowedEngines = map[string]bool{"woo": true}
+)
 
 type StoreService struct {
 	repo domain.StoreRepository
@@ -21,15 +25,35 @@ func NewStoreService(repo domain.StoreRepository) *StoreService {
 
 func (s *StoreService) CreateStore(ctx context.Context, req domain.CreateStoreRequest) (*domain.Store, error) {
 	if err := validateStoreName(req.Name); err != nil {
+		return nil, &domain.APIError{Code: 400, Message: err.Error()}
+	}
+
+	if !allowedPlans[req.Plan] {
 		return nil, &domain.APIError{
-			Code:    400,
-			Message: err.Error(),
+			Code:    domain.ErrInvalidPlan.Code,
+			Message: fmt.Sprintf("invalid plan %q: allowed values are small, medium", req.Plan),
+		}
+	}
+
+	if !allowedEngines[req.Engine] {
+		return nil, &domain.APIError{
+			Code:    domain.ErrInvalidEngine.Code,
+			Message: fmt.Sprintf("invalid engine %q: allowed values are woo", req.Engine),
 		}
 	}
 
 	namespace := req.Namespace
 	if namespace == "" {
 		namespace = "default"
+	}
+
+	// Duplicate check
+	existing, _ := s.repo.Get(ctx, strings.ToLower(req.Name), namespace)
+	if existing != nil {
+		return nil, &domain.APIError{
+			Code:    domain.ErrStoreExists.Code,
+			Message: fmt.Sprintf("store %q already exists", req.Name),
+		}
 	}
 
 	store := domain.Store{

@@ -35,16 +35,23 @@ type StoreSpec struct {
 	Plan string `json:"plan"`
 }
 
-// StoreStatus defines the observed state of Store.
 // StoreStatus defines the observed state of Store
 type StoreStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// Phase is the current lifecycle phase (Provisioning, Ready, Failed)
 	Phase string `json:"phase,omitempty"`
-	URL   string `json:"url,omitempty"`
 
-	// Conditions store the detailed state history (optional but recommended to keep)
+	// URL is the external endpoint for the store
+	URL string `json:"url,omitempty"`
+
+	// Message is a human-readable description of the current state
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Reason is a machine-readable reason code for the current phase
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Conditions store the detailed state history
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

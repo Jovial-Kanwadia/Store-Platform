@@ -26,6 +26,7 @@ func SetupRouter(storeSvc *service.StoreService, limiter domain.Limiter, cfg *co
 
 	api := r.Group("/api/v1")
 	api.Use(middleware.RateLimitMiddleware(limiter))
+	api.Use(middleware.AuditLogger())
 
 	storeHandler := handlers.NewStoreHandler(storeSvc)
 	api.POST("/stores", storeHandler.Create)

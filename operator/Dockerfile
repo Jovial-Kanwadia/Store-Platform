@@ -26,6 +26,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
+# Copy Helm charts so the operator can install them at runtime
+COPY charts/ /charts/
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

@@ -27,3 +27,11 @@ type APIError struct {
 func (e *APIError) Error() string {
 	return e.Message
 }
+
+// Sentinel errors for structured HTTP error mapping
+var (
+	ErrStoreExists   = &APIError{Code: 409, Message: "store already exists"}
+	ErrInvalidName   = &APIError{Code: 400, Message: "invalid store name"}
+	ErrInvalidPlan   = &APIError{Code: 400, Message: "invalid plan"}
+	ErrInvalidEngine = &APIError{Code: 400, Message: "invalid engine"}
+)
