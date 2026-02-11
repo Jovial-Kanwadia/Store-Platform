@@ -5,6 +5,8 @@ import "time"
 type Store struct {
 	Name      string    `json:"name"`
 	Namespace string    `json:"namespace"`
+	Engine    string    `json:"engine"`
+	Plan      string    `json:"plan"`
 	Status    string    `json:"status"`
 	URL       string    `json:"url"`
 	CreatedAt time.Time `json:"createdAt"`

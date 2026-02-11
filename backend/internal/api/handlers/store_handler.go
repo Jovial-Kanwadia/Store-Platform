@@ -17,6 +17,28 @@ func NewStoreHandler(svc *service.StoreService) *StoreHandler {
 	return &StoreHandler{svc: svc}
 }
 
+type storeResponse struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Engine    string `json:"engine"`
+	Plan      string `json:"plan"`
+	Status    string `json:"status"`
+	URL       string `json:"url,omitempty"`
+	CreatedAt string `json:"createdAt"`
+}
+
+func toStoreResponse(s domain.Store) storeResponse {
+	return storeResponse{
+		Name:      s.Name,
+		Namespace: s.Namespace,
+		Engine:    s.Engine,
+		Plan:      s.Plan,
+		Status:    s.Status,
+		URL:       s.URL,
+		CreatedAt: s.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
 func (h *StoreHandler) Create(c *gin.Context) {
 	var req domain.CreateStoreRequest
 
@@ -42,7 +64,7 @@ func (h *StoreHandler) Create(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, store)
+	c.JSON(http.StatusCreated, toStoreResponse(*store))
 }
 
 func (h *StoreHandler) List(c *gin.Context) {
@@ -63,7 +85,11 @@ func (h *StoreHandler) List(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, stores)
+	resp := make([]storeResponse, 0, len(stores))
+	for _, s := range stores {
+		resp = append(resp, toStoreResponse(s))
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *StoreHandler) Get(c *gin.Context) {
@@ -85,7 +111,7 @@ func (h *StoreHandler) Get(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, store)
+	c.JSON(http.StatusOK, toStoreResponse(*store))
 }
 
 func (h *StoreHandler) Delete(c *gin.Context) {

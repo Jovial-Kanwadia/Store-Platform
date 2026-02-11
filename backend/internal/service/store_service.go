@@ -35,6 +35,8 @@ func (s *StoreService) CreateStore(ctx context.Context, req domain.CreateStoreRe
 	store := domain.Store{
 		Name:      strings.ToLower(req.Name),
 		Namespace: namespace,
+		Engine:    req.Engine,
+		Plan:      req.Plan,
 		Status:    "Pending",
 		URL:       fmt.Sprintf("https://%s.stores.example.com", req.Name),
 	}

@@ -57,8 +57,8 @@ func (c *Client) Create(ctx context.Context, s domain.Store) error {
 				"namespace": s.Namespace,
 			},
 			"spec": map[string]interface{}{
-				"status": s.Status,
-				"url":    s.URL,
+				"engine": s.Engine,
+				"plan":   s.Plan,
 			},
 		},
 	}
@@ -120,18 +120,28 @@ func unstructuredToStore(obj *unstructured.Unstructured) (*domain.Store, error) 
 	namespace := obj.GetNamespace()
 	createdAt := obj.GetCreationTimestamp().Time
 
+	// 1. Extract Spec
 	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
 	if err != nil || !found {
 		spec = make(map[string]interface{})
 	}
 
-	status, _, _ := unstructured.NestedString(spec, "status")
-	url, _, _ := unstructured.NestedString(spec, "url")
+	// 2. Extract Fields safely
+	statusMap, _, _ := unstructured.NestedMap(obj.Object, "status")
+	phase, _, _ := unstructured.NestedString(statusMap, "phase")
+	url, _, _ := unstructured.NestedString(statusMap, "url")
+	
+	// FIX: Read Engine and Plan so they appear in the API response
+	engine, _, _ := unstructured.NestedString(spec, "engine")
+	plan, _, _ := unstructured.NestedString(spec, "plan")
 
 	return &domain.Store{
 		Name:      name,
 		Namespace: namespace,
-		Status:    status,
+		// Map them to the flat struct
+		Engine:    engine,
+		Plan:      plan,
+		Status:    phase, // "phase" from K8s maps to "status" in our JSON
 		URL:       url,
 		CreatedAt: createdAt,
 	}, nil
