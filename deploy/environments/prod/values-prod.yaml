@@ -1,0 +1,25 @@
+# Global production values used by operator/backend charts
+global:
+  environment: production
+  externalHost: ""  # injected at runtime; replace with actual value
+  storageClass: gp2            # or gp3 based on your cluster (check NAME   PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+gp2    kubernetes.io/aws-ebs   Delete          WaitForFirstConsumer   false                  43m)
+  redis:
+    host: redis.default.svc.cluster.local
+    port: 6379
+images:
+  backend:
+    repository: ghcr.io/Jovial-Kanwadia/store-backend
+    tag: latest
+  operator:
+    repository: ghcr.io/Jovial-Kanwadia/store-operator
+    tag: latest
+wordpress:
+  # If you published engine-woo to an OCI registry, put its OCI URI here.
+  # e.g. "oci://ghcr.io/<your-org>/engine-woo:0.1.0"
+  chartRef: "oci://ghcr.io/Jovial-Kanwadia/engine-woo:0.1.0"
+ingress:
+  className: nginx
+  # hostTemplate will be used by the operator when creating per-store ingress:
+  # example final host: <store-name>.<EXT_HOST>.nip.io
+  hostTemplate: "{{ .StoreName }}.{{ .Values.global.externalHost }}.nip.io"

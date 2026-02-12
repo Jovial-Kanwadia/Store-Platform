@@ -135,3 +135,25 @@ jobs:
             echo "Pushing ${pkg} to oci://ghcr.io/${OWNER_LC}/charts"
             helm push "${pkg}" oci://ghcr.io/${OWNER_LC}/charts
           done
+
+      - name: Build and Push Docker Images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          
+          # Login to GHCR (Docker)
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Build and Push Backend
+          BACKEND_IMG="ghcr.io/${OWNER_LC}/store-backend"
+          docker build -t ${BACKEND_IMG}:v1 -t ${BACKEND_IMG}:${{ github.sha }} -t ${BACKEND_IMG}:latest ./backend
+          docker push ${BACKEND_IMG}:v1
+          docker push ${BACKEND_IMG}:${{ github.sha }}
+          docker push ${BACKEND_IMG}:latest
+
+          # Build and Push Operator
+          OPERATOR_IMG="ghcr.io/${OWNER_LC}/store-operator"
+          docker build -t ${OPERATOR_IMG}:v1 -t ${OPERATOR_IMG}:${{ github.sha }} -t ${OPERATOR_IMG}:latest ./operator
+          docker push ${OPERATOR_IMG}:v1
+          docker push ${OPERATOR_IMG}:${{ github.sha }}
+          docker push ${OPERATOR_IMG}:latest

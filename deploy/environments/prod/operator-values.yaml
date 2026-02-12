@@ -1,0 +1,19 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/Jovial-Kanwadia/store-operator
+  tag: latest
+  pullPolicy: Always
+
+env:
+  # Operator will use an OCI chart reference (recommended).
+  WORDPRESS_CHART_PATH: "{{ .Values.wordpress.chartRef }}"
+
+global: 
+  externalHost: 
+  storageClass: gp2
+
+# RBAC / serviceAccount can be tuned here if your chart supports it
+serviceAccount:
+  create: false
+  name: store-operator-sa
