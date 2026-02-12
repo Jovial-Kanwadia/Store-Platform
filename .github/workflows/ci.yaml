@@ -48,39 +48,24 @@ jobs:
 
       - name: Prepare Operator Build Context
         run: |
+          # 1. Add repositories needed for dependencies
           helm repo add bitnami https://charts.bitnami.com/bitnami
-          # This downloads the dependencies (WordPress) into charts/engine-woo/charts/
+          
+          # 2. Build dependencies (Downloads WordPress tgz into charts/engine-woo/charts/)
           helm dependency build charts/engine-woo
 
-          # Copy to Operator context (for the local Docker build)
+          # 3. Create the build context directory
           mkdir -p operator/charts/engine-woo
+
+          # 4. Copy the fully hydrated chart (with dependencies) to the operator build folder
           cp -r charts/engine-woo/* operator/charts/engine-woo/
+          
+          # Debug: Prove the files are there for Docker
           ls -R operator/charts/
-
-      - name: Publish Helm Charts to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          # OCI requires lowercase repository names. 
-          # We convert the owner (e.g., Jovial-Kanwadia) to lowercase (jovial-kanwadia).
-          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-
-          # 1. Login to GitHub Container Registry
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-
-          # 2. Package the Chart
-          # (Dependencies were already built in the previous step)
-          helm package charts/engine-woo --destination .cr-release-packages
-
-          # 3. Push to GHCR
-          for pkg in .cr-release-packages/*.tgz; do
-            if [ -z "${pkg}" ]; then continue; fi
-            echo "Pushing ${pkg} to oci://ghcr.io/${OWNER_LC}/charts"
-            helm push "${pkg}" oci://ghcr.io/${OWNER_LC}/charts
-          done
-          cp .cr-release-packages/engine-woo-*.tgz operator/
 
       - name: Build Docker Images
         run: |
+          # The Dockerfile will now find 'charts/engine-woo' in its context
           docker build -t store-backend:v1 backend/
           docker build -t store-operator:v1 operator/
 
@@ -96,7 +81,7 @@ jobs:
           kubectl apply -f deploy/backend/
           kubectl apply -f deploy/operator/
 
-          echo "Waiting for pods..."
+          echo "Waiting for critical pods..."
           kubectl wait --for=condition=ready pod -l app=redis --timeout=120s
           kubectl wait --for=condition=ready pod -l app=store-backend --timeout=120s
           kubectl wait --for=condition=ready pod -l app=store-operator --timeout=120s
@@ -105,20 +90,21 @@ jobs:
 
       - name: Run E2E Tests
         run: |
-          # Forward the ingress controller so nip.io hostnames resolve
+          # Forward Backend API (8080) and Ingress (8081)
           kubectl port-forward svc/store-backend 8080:80 &
           kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8081:80 &
-          # Give it a moment to connect
-          sleep 10
+          
+          # Wait for tunnels to establish
+          sleep 5
           chmod +x test/e2e.sh
           
-          # Run the test. If it fails, run the logging commands.
+          # Run the robust test script
           if ./test/e2e.sh; then
             echo "✅ E2E Test Passed"
           else
-            echo "❌ E2E Test Failed - Dumping Logs for Debugging..."
+            echo "❌ E2E Test Failed - Dumping Debug Logs..."
             
-            echo "::group::Operator Logs (Why did it fail?)"
+            echo "::group::Operator Logs"
             kubectl logs -l app=store-operator --tail=200
             echo "::endgroup::"
             
@@ -126,10 +112,26 @@ jobs:
             kubectl logs -l app=store-backend --tail=100
             echo "::endgroup::"
             
-            echo "::group::Store Status Object"
+            echo "::group::Store Status"
             kubectl get stores -o yaml
             echo "::endgroup::"
             
-            # Ensure the pipeline actually fails
             exit 1
           fi
+
+      # MOVED TO END: Only publish if tests pass!
+      - name: Publish Helm Charts to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          # Package the chart (using the source which already has dependencies built)
+          helm package charts/engine-woo --destination .cr-release-packages
+
+          # Push to OCI Registry
+          for pkg in .cr-release-packages/*.tgz; do
+            if [ -z "${pkg}" ]; then continue; fi
+            echo "Pushing ${pkg} to oci://ghcr.io/${OWNER_LC}/charts"
+            helm push "${pkg}" oci://ghcr.io/${OWNER_LC}/charts
+          done
