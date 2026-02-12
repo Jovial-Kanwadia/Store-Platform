@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
-	"net/http"
+	"strings"
+
 	"os"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1alpha1 "github.com/Jovial-Kanwadia/store-operator/api/v1alpha1"
@@ -57,10 +61,14 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			storeDeletionTotal.Inc()
 
 			// A. Uninstall Helm Release
+			// A. Uninstall Helm Release
 			if err := helm.UninstallRelease(ctrl.GetConfigOrDie(), releaseName, nsName); err != nil {
-				logger.Error(err, "Helm uninstall failed")
-				r.Recorder.Eventf(&store, corev1.EventTypeWarning, "DeleteFailed", "Helm uninstall failed: %v", err)
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				// Ignore "not found" errors to prevent getting stuck
+				if !strings.Contains(err.Error(), "not found") {
+					logger.Error(err, "Helm uninstall failed")
+					r.Recorder.Eventf(&store, corev1.EventTypeWarning, "DeleteFailed", "Helm uninstall failed: %v", err)
+					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				}
 			}
 
 			// B. Delete PVCs (Clean up storage)
@@ -73,15 +81,25 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 			// C. Delete Namespace
 			var ns corev1.Namespace
-			if err := r.Get(ctx, types.NamespacedName{Name: nsName}, &ns); err == nil {
-				if err := r.Delete(ctx, &ns); err != nil {
-					return ctrl.Result{}, err
+			err := r.Get(ctx, types.NamespacedName{Name: nsName}, &ns)
+			if err == nil {
+				// Namespace exists - DELETE IT
+				if ns.Status.Phase != corev1.NamespaceTerminating {
+					logger.Info("Deleting Namespace", "namespace", nsName)
+					if err := r.Delete(ctx, &ns); err != nil {
+						return ctrl.Result{}, err
+					}
 				}
 				// Wait for namespace to actually vanish
+				logger.Info("Waiting for Namespace to terminate...", "namespace", nsName)
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			} else if !apierrors.IsNotFound(err) {
+				// Real error (e.g. connection refused) - DO NOT remove finalizer yet
+				logger.Error(err, "Failed to check namespace existence")
+				return ctrl.Result{}, err
 			}
 
-			// D. Remove Finalizer
+			// D. Remove Finalizer (Only reachable if Namespace is NotFound)
 			store.Finalizers = removeString(store.Finalizers, storeFinalizer)
 			if err := r.Update(ctx, &store); err != nil {
 				return ctrl.Result{}, err
@@ -112,6 +130,12 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// NEW: Manage Credentials
+	creds, err := r.ReconcileCredentials(ctx, &store)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// C. Apply Guardrails (Quota, Limits, NetPol)
 	if err := r.ensureQuota(ctx, nsName, store.Spec.Plan); err != nil {
 		return ctrl.Result{}, err
@@ -133,23 +157,38 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	values := map[string]interface{}{
 		"wordpressBlogName": store.Name,
 		"service":           map[string]interface{}{"type": "ClusterIP"},
-		"ingress": map[string]interface{}{
-			"enabled":          true,
-			"ingressClassName": "nginx",
-			"hostname":         fmt.Sprintf("%s.127.0.0.1.nip.io", store.Name),
-		},
 		"volumePermissions": map[string]interface{}{"enabled": false},
 
-		// 1. Disable Persistence (Critical for Kind/Local speed)
-		"persistence": map[string]interface{}{
-			"enabled": false,
+		// Inject Credentials & Networking
+		"wordpress": map[string]interface{}{
+			"password": creds["wordpress-password"],
+			"mariadb": map[string]interface{}{
+				"auth": map[string]interface{}{
+					"rootPassword": creds["mariadb-root-password"],
+					"password":     creds["mariadb-user-password"],
+				},
+			},
+			"ingress": map[string]interface{}{
+				"enabled":          true,
+				"ingressClassName": "nginx",
+				"hostname":         fmt.Sprintf("%s.127.0.0.1.nip.io", store.Name),
+			},
 		},
 		"mariadb": map[string]interface{}{
+			"auth": map[string]interface{}{
+				"rootPassword": creds["mariadb-root-password"],
+				"password":     creds["mariadb-user-password"],
+			},
 			"primary": map[string]interface{}{
 				"persistence": map[string]interface{}{
 					"enabled": false,
 				},
 			},
+		},
+
+		// 1. Disable Persistence (Critical for Kind/Local speed)
+		"persistence": map[string]interface{}{
+			"enabled": false,
 		},
 
 		// 2. Relax Probes (Critical for slow laptops)
@@ -180,38 +219,45 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	provisionStart := store.CreationTimestamp.Time
 
-	if err := helm.InstallOrUpgrade(ctx, ctrl.GetConfigOrDie(), releaseName, nsName, chartPath, values); err != nil {
-		logger.Error(err, "Helm install failed")
-		store.Status.Phase = "Failed"
-		store.Status.Message = fmt.Sprintf("Helm install failed: %v", err)
-		store.Status.Reason = "HelmError"
-		if err := r.Status().Update(ctx, &store); err != nil {
-			logger.Error(err, "unable to update Store status")
-			return ctrl.Result{}, err
-		}
+	// CHECK IDEMPOTENCY: Only run Helm if Spec changed or not ready
+	if store.Generation != store.Status.ObservedGeneration || store.Status.Phase != "Ready" {
+		if err := helm.InstallOrUpgrade(ctx, ctrl.GetConfigOrDie(), releaseName, nsName, chartPath, values); err != nil {
+			logger.Error(err, "Helm install failed")
+			store.Status.Phase = "Failed"
+			store.Status.Message = fmt.Sprintf("Helm install failed: %v", err)
+			store.Status.Reason = "HelmError"
+			if err := r.Status().Update(ctx, &store); err != nil {
+				logger.Error(err, "unable to update Store status")
+				return ctrl.Result{}, err
+			}
 
-		r.Recorder.Eventf(&store, corev1.EventTypeWarning, "Failed", "Installation failed: %v", err)
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			r.Recorder.Eventf(&store, corev1.EventTypeWarning, "Failed", "Installation failed: %v", err)
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+		// Update ObservedGeneration after successful Helm run
+		store.Status.ObservedGeneration = store.Generation
+		// We don't update status here yet, we wait until final success to save API calls
 	}
 
-	// G. Verify Readiness (Probe URL)
-	storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
-	internalURL := fmt.Sprintf("http://%s-wordpress.%s.svc.cluster.local", releaseName, nsName)
-	if err := r.probeURL(ctx, internalURL); err != nil {
-		logger.Info("Waiting for Store URL...", "url", storeURL)
-		store.Status.Message = "Waiting for store to become ready..."
+	// G. Verify Readiness (Check if Pod is Ready)
+	// We use the Kubernetes API instead of HTTP probing because probing internal
+	// cluster IPs from a local operator (outside the cluster) is flaky/impossible.
+	if !r.isPodReady(ctx, nsName) {
+		logger.Info("Waiting for Pods to be Ready...", "namespace", nsName)
+		store.Status.Message = "Waiting for pods to become ready..."
 		store.Status.Reason = "WaitingForPods"
 		if err := r.Status().Update(ctx, &store); err != nil {
 			logger.Error(err, "unable to update Store status")
 			return ctrl.Result{}, err
 		}
 
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	// H. Success!
 	if store.Status.Phase != "Ready" {
 		store.Status.Phase = "Ready"
+		storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
 		store.Status.URL = storeURL
 		store.Status.Message = ""
 		store.Status.Reason = ""
@@ -227,18 +273,35 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	return ctrl.Result{}, nil
 }
 
-// probeURL tries to hit the URL. Returns nil if 200 OK.
-func (r *StoreReconciler) probeURL(ctx context.Context, url string) error {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
+// isPodReady checks if there is at least one running and ready Pod for the WordPress app
+func (r *StoreReconciler) isPodReady(ctx context.Context, namespace string) bool {
+	var podList corev1.PodList
+	// Bitnami WordPress charts use this label by default
+	opts := []client.ListOption{
+		client.InNamespace(namespace),
+		client.MatchingLabels{"app.kubernetes.io/name": "wordpress"},
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		return nil
+
+	if err := r.List(ctx, &podList, opts...); err != nil {
+		return false
 	}
-	return fmt.Errorf("status code %d", resp.StatusCode)
+
+	if len(podList.Items) == 0 {
+		return false
+	}
+
+	for _, pod := range podList.Items {
+		// Check if Pod is Running
+		if pod.Status.Phase == corev1.PodRunning {
+			// Check if it's Ready
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func containsString(slice []string, s string) bool {
@@ -265,4 +328,61 @@ func (r *StoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1alpha1.Store{}).
 		Named("store").
 		Complete(r)
+}
+
+// Generate a random secure password
+func generatePassword(length int) string {
+	b := make([]byte, length)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "default-secure-password-change-me" // Fallback (should rarely happen)
+	}
+	return base64.URLEncoding.EncodeToString(b)[:length]
+}
+
+// ReconcileCredentials ensures a secret exists with stable passwords
+func (r *StoreReconciler) ReconcileCredentials(ctx context.Context, store *infrav1alpha1.Store) (map[string]string, error) {
+	secretName := store.Name + "-creds"
+	secret := &corev1.Secret{}
+
+	// 1. Try to fetch existing secret
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: store.Namespace}, secret)
+
+	if err != nil && apierrors.IsNotFound(err) {
+		// 2. Secret doesn't exist? Create it!
+		log.Log.Info("Generating new credentials for store", "store", store.Name)
+
+		creds := map[string]string{
+			"mariadb-root-password": generatePassword(20),
+			"mariadb-user-password": generatePassword(20),
+			"wordpress-password":    generatePassword(16),
+		}
+
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: store.Namespace, // Store it in the SAME namespace as the store
+			},
+			StringData: creds,
+		}
+
+		// Set OwnerReference so deleting the Store deletes the Secret
+		if err := controllerutil.SetControllerReference(store, secret, r.Scheme); err != nil {
+			return nil, err
+		}
+
+		if err := r.Create(ctx, secret); err != nil {
+			return nil, err
+		}
+		return creds, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	// 3. Secret exists? Return existing values
+	existingCreds := make(map[string]string)
+	for k, v := range secret.Data {
+		existingCreds[k] = string(v)
+	}
+	return existingCreds, nil
 }

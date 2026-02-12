@@ -40,6 +40,10 @@ type StoreStatus struct {
 	// Phase is the current lifecycle phase (Provisioning, Ready, Failed)
 	Phase string `json:"phase,omitempty"`
 
+	// ObservedGeneration is the last generation of the Store that was successfully reconciled
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// URL is the external endpoint for the store
 	URL string `json:"url,omitempty"`
 

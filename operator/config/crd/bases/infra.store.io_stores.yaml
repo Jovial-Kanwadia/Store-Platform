@@ -113,6 +113,11 @@ spec:
                 description: Message is a human-readable description of the current
                   state
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the last generation of the Store
+                  that was successfully reconciled
+                format: int64
+                type: integer
               phase:
                 description: Phase is the current lifecycle phase (Provisioning, Ready,
                   Failed)
