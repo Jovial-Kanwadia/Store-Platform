@@ -1,0 +1,58 @@
+# 1. Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-dashboard
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: store-dashboard
+  template:
+    metadata:
+      labels:
+        app: store-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/jovial-kanwadia/store-dashboard:v1
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+      imagePullSecrets:
+        - name: ghcr-secret
+---
+# 2. Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-dashboard
+  namespace: default
+spec:
+  selector:
+    app: store-dashboard
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+# 3. Ingress (The Public URL)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: store-dashboard
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dashboard.165.22.215.118.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: store-dashboard
+                port:
+                  number: 80

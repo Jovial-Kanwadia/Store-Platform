@@ -1,9 +1,8 @@
 # Global production values used by operator/backend charts
 global:
   environment: production
-  externalHost: ""  # injected at runtime; replace with actual value
-  storageClass: gp2            # or gp3 based on your cluster (check NAME   PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
-gp2    kubernetes.io/aws-ebs   Delete          WaitForFirstConsumer   false                  43m)
+  externalHost: "165.22.215.118.nip.io"
+  storageClass: local-path
   redis:
     host: redis.default.svc.cluster.local
     port: 6379

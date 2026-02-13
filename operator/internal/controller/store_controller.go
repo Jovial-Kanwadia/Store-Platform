@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"os"
 	"time"
 
 	"github.com/Jovial-Kanwadia/store-operator/internal/helm"
@@ -148,10 +147,12 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// D. Determine Chart Path
-	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
-	if chartPath == "" {
-		chartPath = "../charts/engine-woo"
-	}
+	// chartPath := os.Getenv("WORDPRESS_CHART_PATH")
+	// if chartPath == "" {
+	// 	chartPath = "../charts/engine-woo"
+	// }
+
+	chartPath := "oci://ghcr.io/jovial-kanwadia/charts/engine-woo:0.1.0"
 
 	// E. Prepare Values
 	values := map[string]interface{}{

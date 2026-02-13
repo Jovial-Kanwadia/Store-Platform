@@ -75,8 +75,8 @@ spec:
       serviceAccountName: store-operator-sa
       containers:
         - name: manager
-          image: store-operator:v1
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/jovial-kanwadia/store-operator:latest
+          imagePullPolicy: Always
           env:
             - name: WORDPRESS_CHART_PATH
               value: "/charts/engine-woo"

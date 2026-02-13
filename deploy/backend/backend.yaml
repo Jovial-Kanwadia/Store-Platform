@@ -49,8 +49,8 @@ spec:
       serviceAccountName: backend-sa
       containers:
         - name: api
-          image: store-backend:v1
-          imagePullPolicy: IfNotPresent # Use the local image we loaded
+          image: ghcr.io/jovial-kanwadia/store-backend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           env:
