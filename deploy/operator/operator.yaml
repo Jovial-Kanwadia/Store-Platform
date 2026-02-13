@@ -80,6 +80,8 @@ spec:
           env:
             - name: WORDPRESS_CHART_PATH
               value: "/charts/engine-woo"
+            - name: BASE_DOMAIN
+              value: "165.22.215.118.nip.io"
           resources:
             limits:
               cpu: 200m

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"os"
 	"time"
 
 	"github.com/Jovial-Kanwadia/store-operator/internal/helm"
@@ -147,12 +148,15 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// D. Determine Chart Path
-	// chartPath := os.Getenv("WORDPRESS_CHART_PATH")
-	// if chartPath == "" {
-	// 	chartPath = "../charts/engine-woo"
-	// }
+	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
+	if chartPath == "" {
+		chartPath = "../charts/engine-woo"
+	}
 
-	chartPath := "oci://ghcr.io/jovial-kanwadia/charts/engine-woo:0.1.0"
+	baseDomain := os.Getenv("BASE_DOMAIN")
+	if baseDomain == "" {
+		baseDomain = "127.0.0.1.nip.io"
+	}
 
 	// E. Prepare Values
 	values := map[string]interface{}{
@@ -161,19 +165,11 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		"volumePermissions": map[string]interface{}{"enabled": false},
 
 		// Inject Credentials & Networking
-		"wordpress": map[string]interface{}{
-			"password": creds["wordpress-password"],
-			"mariadb": map[string]interface{}{
-				"auth": map[string]interface{}{
-					"rootPassword": creds["mariadb-root-password"],
-					"password":     creds["mariadb-user-password"],
-				},
-			},
-			"ingress": map[string]interface{}{
-				"enabled":          true,
-				"ingressClassName": "nginx",
-				"hostname":         fmt.Sprintf("%s.127.0.0.1.nip.io", store.Name),
-			},
+		"wordpressPassword": creds["wordpress-password"],
+		"ingress": map[string]interface{}{
+			"enabled":          true,
+			"ingressClassName": "nginx",
+			"hostname":         fmt.Sprintf("%s.%s", store.Name, baseDomain),
 		},
 		"mariadb": map[string]interface{}{
 			"auth": map[string]interface{}{
@@ -258,7 +254,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// H. Success!
 	if store.Status.Phase != "Ready" {
 		store.Status.Phase = "Ready"
-		storeURL := fmt.Sprintf("http://%s.127.0.0.1.nip.io", store.Name)
+		storeURL := fmt.Sprintf("http://%s.%s", store.Name, baseDomain)
 		store.Status.URL = storeURL
 		store.Status.Message = ""
 		store.Status.Reason = ""
