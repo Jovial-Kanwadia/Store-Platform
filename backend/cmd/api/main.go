@@ -54,7 +54,7 @@ func main() {
 		)
 	}
 
-	storeSvc := service.NewStoreService(k8sClient)
+	storeSvc := service.NewStoreService(k8sClient, cfg)
 
 	router := api.SetupRouter(storeSvc, limiterSvc, cfg)
 

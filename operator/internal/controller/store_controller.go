@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"os"
 	"time"
 
+	"github.com/Jovial-Kanwadia/store-operator/internal/config"
 	"github.com/Jovial-Kanwadia/store-operator/internal/helm"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,13 +25,12 @@ import (
 	infrav1alpha1 "github.com/Jovial-Kanwadia/store-operator/api/v1alpha1"
 )
 
-const storeFinalizer = "infra.store.io/finalizer"
-
 // StoreReconciler reconciles a Store object
 type StoreReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	Config   *config.OperatorConfig
 }
 
 // +kubebuilder:rbac:groups=infra.store.io,resources=stores,verbs=get;list;watch;create;update;patch;delete
@@ -51,7 +50,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	nsName := fmt.Sprintf("store-%s", store.Name)
+	nsName := fmt.Sprintf("%s%s", StoreNamespacePrefix, store.Name)
 	releaseName := store.Name
 
 	// 1. DELETE LOGIC
@@ -61,13 +60,12 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			storeDeletionTotal.Inc()
 
 			// A. Uninstall Helm Release
-			// A. Uninstall Helm Release
 			if err := helm.UninstallRelease(ctrl.GetConfigOrDie(), releaseName, nsName); err != nil {
 				// Ignore "not found" errors to prevent getting stuck
 				if !strings.Contains(err.Error(), "not found") {
 					logger.Error(err, "Helm uninstall failed")
-					r.Recorder.Eventf(&store, corev1.EventTypeWarning, "DeleteFailed", "Helm uninstall failed: %v", err)
-					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+					r.Recorder.Eventf(&store, corev1.EventTypeWarning, EventReasonDeleteFailed, "Helm uninstall failed: %v", err)
+					return ctrl.Result{RequeueAfter: r.Config.DeletionRequeueInterval}, nil
 				}
 			}
 
@@ -75,7 +73,10 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			var pvcList corev1.PersistentVolumeClaimList
 			if err := r.List(ctx, &pvcList, &client.ListOptions{Namespace: nsName}); err == nil {
 				for _, pvc := range pvcList.Items {
-					_ = r.Delete(ctx, &pvc)
+					if err := r.Delete(ctx, &pvc); err != nil {
+						logger.Error(err, "Failed to delete PVC", "pvc", pvc.Name)
+						// Continue deleting other PVCs even if one fails
+					}
 				}
 			}
 
@@ -92,7 +93,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				}
 				// Wait for namespace to actually vanish
 				logger.Info("Waiting for Namespace to terminate...", "namespace", nsName)
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				return ctrl.Result{RequeueAfter: r.Config.DeletionRequeueInterval}, nil
 			} else if !apierrors.IsNotFound(err) {
 				// Real error (e.g. connection refused) - DO NOT remove finalizer yet
 				logger.Error(err, "Failed to check namespace existence")
@@ -125,7 +126,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			if err := r.Create(ctx, &ns); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: r.Config.NamespaceRequeueInterval}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -140,23 +141,16 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.ensureQuota(ctx, nsName, store.Spec.Plan); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensureLimitRange(ctx, nsName); err != nil {
+	if err := r.ensureLimitRange(ctx, nsName, store.Spec.Plan); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureNetworkPolicy(ctx, nsName); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// D. Determine Chart Path
-	chartPath := os.Getenv("WORDPRESS_CHART_PATH")
-	if chartPath == "" {
-		chartPath = "../charts/engine-woo"
-	}
-
-	baseDomain := os.Getenv("BASE_DOMAIN")
-	if baseDomain == "" {
-		baseDomain = "127.0.0.1.nip.io"
-	}
+	// D. Determine Chart Path and Base Domain from Config
+	chartPath := r.Config.WordPressChartPath
+	baseDomain := r.Config.BaseDomain
 
 	// E. Prepare Values
 	values := map[string]interface{}{
@@ -183,53 +177,52 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			},
 		},
 
-		// 1. Disable Persistence (Critical for Kind/Local speed)
+		// 1. Configure Persistence from Config
 		"persistence": map[string]interface{}{
-			"enabled": false,
+			"enabled": r.Config.PersistenceEnabled,
 		},
 
-		// 2. Relax Probes (Critical for slow laptops)
-		// Give WordPress 2 minutes to start before Kubernetes kills it
+		// 2. Configure Probes from Config
 		"livenessProbe": map[string]interface{}{
-			"initialDelaySeconds": 120,
-			"periodSeconds":       20,
+			"initialDelaySeconds": r.Config.LivenessProbeInitialDelay,
+			"periodSeconds":       r.Config.LivenessProbePeriod,
 		},
 		"readinessProbe": map[string]interface{}{
-			"initialDelaySeconds": 60,
-			"periodSeconds":       10,
+			"initialDelaySeconds": r.Config.ReadinessProbeInitialDelay,
+			"periodSeconds":       r.Config.ReadinessProbePeriod,
 		},
 	}
 
 	// F. Install/Upgrade Helm
 	if store.Status.Phase == "" {
-		store.Status.Phase = "Provisioning"
+		store.Status.Phase = PhaseProvisioning
 		store.Status.Message = "Started provisioning store"
-		store.Status.Reason = "Provisioning"
+		store.Status.Reason = ReasonProvisioning
 		if err := r.Status().Update(ctx, &store); err != nil {
 			logger.Error(err, "unable to update Store status")
 			return ctrl.Result{}, err
 		}
 
-		r.Recorder.Event(&store, corev1.EventTypeNormal, "Provisioning", fmt.Sprintf("Started provisioning store %s", store.Name))
+		r.Recorder.Event(&store, corev1.EventTypeNormal, EventReasonProvisioning, fmt.Sprintf("Started provisioning store %s", store.Name))
 		storeCreatedTotal.Inc()
 	}
 
 	provisionStart := store.CreationTimestamp.Time
 
 	// CHECK IDEMPOTENCY: Only run Helm if Spec changed or not ready
-	if store.Generation != store.Status.ObservedGeneration || store.Status.Phase != "Ready" {
+	if store.Generation != store.Status.ObservedGeneration || store.Status.Phase != PhaseReady {
 		if err := helm.InstallOrUpgrade(ctx, ctrl.GetConfigOrDie(), releaseName, nsName, chartPath, values); err != nil {
 			logger.Error(err, "Helm install failed")
-			store.Status.Phase = "Failed"
+			store.Status.Phase = PhaseFailed
 			store.Status.Message = fmt.Sprintf("Helm install failed: %v", err)
-			store.Status.Reason = "HelmError"
+			store.Status.Reason = ReasonHelmError
 			if err := r.Status().Update(ctx, &store); err != nil {
 				logger.Error(err, "unable to update Store status")
 				return ctrl.Result{}, err
 			}
 
-			r.Recorder.Eventf(&store, corev1.EventTypeWarning, "Failed", "Installation failed: %v", err)
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			r.Recorder.Eventf(&store, corev1.EventTypeWarning, EventReasonFailed, "Installation failed: %v", err)
+			return ctrl.Result{RequeueAfter: r.Config.HelmFailureRetryInterval}, nil
 		}
 		// Update ObservedGeneration after successful Helm run
 		store.Status.ObservedGeneration = store.Generation
@@ -242,7 +235,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !r.isPodReady(ctx, nsName) {
 		logger.Info("Waiting for Pods to be Ready...", "namespace", nsName)
 		store.Status.Message = "Waiting for pods to become ready..."
-		store.Status.Reason = "WaitingForPods"
+		store.Status.Reason = ReasonWaitingForPods
 		if err := r.Status().Update(ctx, &store); err != nil {
 			logger.Error(err, "unable to update Store status")
 			return ctrl.Result{}, err
@@ -252,8 +245,8 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// H. Success!
-	if store.Status.Phase != "Ready" {
-		store.Status.Phase = "Ready"
+	if store.Status.Phase != PhaseReady {
+		store.Status.Phase = PhaseReady
 		storeURL := fmt.Sprintf("http://%s.%s", store.Name, baseDomain)
 		store.Status.URL = storeURL
 		store.Status.Message = ""
@@ -263,7 +256,7 @@ func (r *StoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 
-		r.Recorder.Eventf(&store, corev1.EventTypeNormal, "Ready", "Store is ready at URL %s", storeURL)
+		r.Recorder.Eventf(&store, corev1.EventTypeNormal, EventReasonReady, "Store is ready at URL %s", storeURL)
 		storeProvisioningSeconds.Observe(time.Since(provisionStart).Seconds())
 	}
 
@@ -350,9 +343,9 @@ func (r *StoreReconciler) ReconcileCredentials(ctx context.Context, store *infra
 		log.Log.Info("Generating new credentials for store", "store", store.Name)
 
 		creds := map[string]string{
-			"mariadb-root-password": generatePassword(20),
-			"mariadb-user-password": generatePassword(20),
-			"wordpress-password":    generatePassword(16),
+			"mariadb-root-password": generatePassword(MariaDBRootPasswordLength),
+			"mariadb-user-password": generatePassword(MariaDBUserPasswordLength),
+			"wordpress-password":    generatePassword(WordPressPasswordLength),
 		}
 
 		secret = &corev1.Secret{

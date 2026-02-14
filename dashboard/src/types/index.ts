@@ -1,11 +1,10 @@
 export interface Store {
   name: string
   namespace: string
-  // FIX: Flatten these (remove 'spec' nesting)
   engine: string
   plan: string
 
-  status: string // This is the string "Ready" or "Provisioning"
+  status: string
   url?: string
   createdAt: string
 }

@@ -6,36 +6,34 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Jovial-Kanwadia/store-platform/backend/internal/config"
 	"github.com/Jovial-Kanwadia/store-platform/backend/internal/domain"
 )
 
-var (
-	dnsNameRegex   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	allowedPlans   = map[string]bool{"small": true, "medium": true}
-	allowedEngines = map[string]bool{"woo": true}
-)
+var dnsNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type StoreService struct {
 	repo domain.StoreRepository
+	cfg  *config.Config
 }
 
-func NewStoreService(repo domain.StoreRepository) *StoreService {
-	return &StoreService{repo: repo}
+func NewStoreService(repo domain.StoreRepository, cfg *config.Config) *StoreService {
+	return &StoreService{repo: repo, cfg: cfg}
 }
 
 func (s *StoreService) CreateStore(ctx context.Context, req domain.CreateStoreRequest) (*domain.Store, error) {
 	if err := validateStoreName(req.Name); err != nil {
-		return nil, &domain.APIError{Code: 400, Message: err.Error()}
+		return nil, &domain.APIError{Code: domain.ErrInvalidName.Code, Message: err.Error()}
 	}
 
-	if !allowedPlans[req.Plan] {
+	if !domain.AllowedPlans[req.Plan] {
 		return nil, &domain.APIError{
 			Code:    domain.ErrInvalidPlan.Code,
-			Message: fmt.Sprintf("invalid plan %q: allowed values are small, medium", req.Plan),
+			Message: fmt.Sprintf("invalid plan %q: allowed values are small, medium, large", req.Plan),
 		}
 	}
 
-	if !allowedEngines[req.Engine] {
+	if !domain.AllowedEngines[req.Engine] {
 		return nil, &domain.APIError{
 			Code:    domain.ErrInvalidEngine.Code,
 			Message: fmt.Sprintf("invalid engine %q: allowed values are woo", req.Engine),
@@ -44,7 +42,7 @@ func (s *StoreService) CreateStore(ctx context.Context, req domain.CreateStoreRe
 
 	namespace := req.Namespace
 	if namespace == "" {
-		namespace = "default"
+		namespace = domain.DefaultNamespace
 	}
 
 	// Duplicate check
@@ -61,13 +59,13 @@ func (s *StoreService) CreateStore(ctx context.Context, req domain.CreateStoreRe
 		Namespace: namespace,
 		Engine:    req.Engine,
 		Plan:      req.Plan,
-		Status:    "Pending",
-		URL:       fmt.Sprintf("https://%s.stores.example.com", req.Name),
+		Status:    domain.StatusPending,
+		URL:       fmt.Sprintf("https://%s.%s", req.Name, s.cfg.BaseDomain),
 	}
 
 	if err := s.repo.Create(ctx, store); err != nil {
 		return nil, &domain.APIError{
-			Code:    500,
+			Code:    domain.ErrInternal.Code,
 			Message: "failed to create store",
 		}
 	}
@@ -79,7 +77,7 @@ func (s *StoreService) ListStores(ctx context.Context, namespace string) ([]doma
 	stores, err := s.repo.List(ctx, namespace)
 	if err != nil {
 		return nil, &domain.APIError{
-			Code:    500,
+			Code:    domain.ErrInternal.Code,
 			Message: "failed to list stores",
 		}
 	}
@@ -89,13 +87,13 @@ func (s *StoreService) ListStores(ctx context.Context, namespace string) ([]doma
 
 func (s *StoreService) GetStore(ctx context.Context, name, namespace string) (*domain.Store, error) {
 	if namespace == "" {
-		namespace = "default"
+		namespace = domain.DefaultNamespace
 	}
 
 	store, err := s.repo.Get(ctx, name, namespace)
 	if err != nil {
 		return nil, &domain.APIError{
-			Code:    404,
+			Code:    domain.ErrStoreNotFound.Code,
 			Message: "store not found",
 		}
 	}
@@ -105,12 +103,12 @@ func (s *StoreService) GetStore(ctx context.Context, name, namespace string) (*d
 
 func (s *StoreService) DeleteStore(ctx context.Context, name, namespace string) error {
 	if namespace == "" {
-		namespace = "default"
+		namespace = domain.DefaultNamespace
 	}
 
 	if err := s.repo.Delete(ctx, name, namespace); err != nil {
 		return &domain.APIError{
-			Code:    500,
+			Code:    domain.ErrInternal.Code,
 			Message: "failed to delete store",
 		}
 	}
@@ -123,8 +121,8 @@ func validateStoreName(name string) error {
 		return fmt.Errorf("store name cannot be empty")
 	}
 
-	if len(name) > 63 {
-		return fmt.Errorf("store name must be 63 characters or less")
+	if len(name) > domain.MaxStoreNameLength {
+		return fmt.Errorf("store name must be %d characters or less", domain.MaxStoreNameLength)
 	}
 
 	if !dnsNameRegex.MatchString(strings.ToLower(name)) {

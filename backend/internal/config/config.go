@@ -14,6 +14,7 @@ type Config struct {
 	Rate        int
 	RateWindow  time.Duration
 	LogLevel    string
+	BaseDomain  string
 }
 
 func Load() (*Config, error) {
@@ -25,6 +26,7 @@ func Load() (*Config, error) {
 		Rate:        getEnvAsInt("RATE_LIMIT", 3),
 		RateWindow:  getEnvAsDuration("RATE_WINDOW", 1*time.Minute),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
+		BaseDomain:  getEnv("BASE_DOMAIN", "127.0.0.1.nip.io"),
 	}
 
 	return cfg, nil

@@ -14,9 +14,9 @@ import (
 )
 
 var storeGVR = schema.GroupVersionResource{
-	Group:    "infra.store.io",
-	Version:  "v1alpha1",
-	Resource: "stores",
+	Group:    domain.CRDGroup,
+	Version:  domain.CRDVersion,
+	Resource: domain.CRDResource,
 }
 
 type Client struct {
@@ -50,8 +50,8 @@ func NewClient(kubeconfigPath string) (*Client, error) {
 func (c *Client) Create(ctx context.Context, s domain.Store) error {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "infra.store.io/v1alpha1",
-			"kind":       "Store",
+			"apiVersion": domain.CRDAPIVersion,
+			"kind":       domain.CRDKind,
 			"metadata": map[string]interface{}{
 				"name":      s.Name,
 				"namespace": s.Namespace,
@@ -130,18 +130,16 @@ func unstructuredToStore(obj *unstructured.Unstructured) (*domain.Store, error) 
 	statusMap, _, _ := unstructured.NestedMap(obj.Object, "status")
 	phase, _, _ := unstructured.NestedString(statusMap, "phase")
 	url, _, _ := unstructured.NestedString(statusMap, "url")
-	
-	// FIX: Read Engine and Plan so they appear in the API response
+
 	engine, _, _ := unstructured.NestedString(spec, "engine")
 	plan, _, _ := unstructured.NestedString(spec, "plan")
 
 	return &domain.Store{
 		Name:      name,
 		Namespace: namespace,
-		// Map them to the flat struct
 		Engine:    engine,
 		Plan:      plan,
-		Status:    phase, // "phase" from K8s maps to "status" in our JSON
+		Status:    phase,
 		URL:       url,
 		CreatedAt: createdAt,
 	}, nil

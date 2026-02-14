@@ -31,7 +31,9 @@ func (e *APIError) Error() string {
 // Sentinel errors for structured HTTP error mapping
 var (
 	ErrStoreExists   = &APIError{Code: 409, Message: "store already exists"}
+	ErrStoreNotFound = &APIError{Code: 404, Message: "store not found"}
 	ErrInvalidName   = &APIError{Code: 400, Message: "invalid store name"}
 	ErrInvalidPlan   = &APIError{Code: 400, Message: "invalid plan"}
 	ErrInvalidEngine = &APIError{Code: 400, Message: "invalid engine"}
+	ErrInternal      = &APIError{Code: 500, Message: "internal server error"}
 )

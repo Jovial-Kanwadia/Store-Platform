@@ -5,33 +5,36 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ensureQuota creates or updates a ResourceQuota
+// ensureQuota creates or updates a ResourceQuota based on plan
 func (r *StoreReconciler) ensureQuota(ctx context.Context, namespace, plan string) error {
 	logger := ctrl.LoggerFrom(ctx)
+
+	// Get resource specs for the plan
+	planSpec := GetPlanSpec(plan)
+
 	quota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "store-resource-quota",
+			Name:      ResourceQuotaName,
 			Namespace: namespace,
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
-				"requests.cpu":    resource.MustParse("1"),
-				"requests.memory": resource.MustParse("1024Mi"), // Increased
-				"limits.cpu":      resource.MustParse("2"),
-				"limits.memory":   resource.MustParse("2048Mi"), // Increased to 2GB
-				"pods":            resource.MustParse("15"),
+				"requests.cpu":    planSpec.RequestsCPU,
+				"requests.memory": planSpec.RequestsMemory,
+				"limits.cpu":      planSpec.LimitsCPU,
+				"limits.memory":   planSpec.LimitsMemory,
+				"pods":            planSpec.MaxPods,
 			},
 		},
 	}
 
 	var existing corev1.ResourceQuota
-	if err := r.Get(ctx, clientObjectKey(namespace, "store-resource-quota"), &existing); err == nil {
+	if err := r.Get(ctx, clientObjectKey(namespace, ResourceQuotaName), &existing); err == nil {
 		existing.Spec = quota.Spec
 		if err := r.Update(ctx, &existing); err != nil {
 			logger.Error(err, "updating ResourceQuota")
@@ -47,13 +50,16 @@ func (r *StoreReconciler) ensureQuota(ctx context.Context, namespace, plan strin
 	return nil
 }
 
-// ensureLimitRange creates defaults for containers
-func (r *StoreReconciler) ensureLimitRange(ctx context.Context, namespace string) error {
+// ensureLimitRange creates defaults for containers based on plan
+func (r *StoreReconciler) ensureLimitRange(ctx context.Context, namespace string, plan string) error {
 	logger := ctrl.LoggerFrom(ctx)
+
+	// Get resource specs for the plan
+	planSpec := GetPlanSpec(plan)
 
 	limit := &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "store-limit-range",
+			Name:      LimitRangeName,
 			Namespace: namespace,
 		},
 		Spec: corev1.LimitRangeSpec{
@@ -61,12 +67,12 @@ func (r *StoreReconciler) ensureLimitRange(ctx context.Context, namespace string
 				{
 					Type: corev1.LimitTypeContainer,
 					Default: corev1.ResourceList{
-						"cpu":    resource.MustParse("500m"),
-						"memory": resource.MustParse("512Mi"), // Increased from 256Mi
+						"cpu":    planSpec.DefaultCPU,
+						"memory": planSpec.DefaultMemory,
 					},
 					DefaultRequest: corev1.ResourceList{
-						"cpu":    resource.MustParse("100m"),
-						"memory": resource.MustParse("256Mi"),
+						"cpu":    planSpec.DefaultRequestCPU,
+						"memory": planSpec.DefaultRequestMemory,
 					},
 				},
 			},
@@ -74,7 +80,7 @@ func (r *StoreReconciler) ensureLimitRange(ctx context.Context, namespace string
 	}
 
 	var existing corev1.LimitRange
-	if err := r.Get(ctx, clientObjectKey(namespace, "store-limit-range"), &existing); err == nil {
+	if err := r.Get(ctx, clientObjectKey(namespace, LimitRangeName), &existing); err == nil {
 		existing.Spec = limit.Spec
 		if err := r.Update(ctx, &existing); err != nil {
 			logger.Error(err, "updating LimitRange")
@@ -93,11 +99,10 @@ func (r *StoreReconciler) ensureLimitRange(ctx context.Context, namespace string
 // ensureNetworkPolicy creates a default-deny policy
 func (r *StoreReconciler) ensureNetworkPolicy(ctx context.Context, namespace string) error {
 	logger := ctrl.LoggerFrom(ctx)
-	name := "store-default-deny"
 
 	np := &netv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      NetworkPolicyName,
 			Namespace: namespace,
 		},
 		Spec: netv1.NetworkPolicySpec{
@@ -134,7 +139,7 @@ func (r *StoreReconciler) ensureNetworkPolicy(ctx context.Context, namespace str
 	}
 
 	var existing netv1.NetworkPolicy
-	if err := r.Get(ctx, clientObjectKey(namespace, name), &existing); err == nil {
+	if err := r.Get(ctx, clientObjectKey(namespace, NetworkPolicyName), &existing); err == nil {
 		existing.Spec = np.Spec
 		if err := r.Update(ctx, &existing); err != nil {
 			logger.Error(err, "updating NetworkPolicy")

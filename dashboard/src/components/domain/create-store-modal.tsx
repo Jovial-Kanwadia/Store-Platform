@@ -27,7 +27,7 @@ import {
 
 type FormValues = {
   name: string
-  plan: "small" | "medium"
+  plan: "small" | "medium" | "large"
   engine: "woo"
 }
 
@@ -36,7 +36,7 @@ const schema = z.object({
     .string()
     .min(1, "Name is required")
     .regex(/^[a-z0-9]+$/, "Lowercase alphanumeric only"),
-  plan: z.enum(["small", "medium"]),
+  plan: z.enum(["small", "medium", "large"]),
   engine: z.enum(["woo"]),
 })
 
@@ -126,6 +126,7 @@ export function CreateStoreModal() {
                   <SelectContent>
                     <SelectItem value="small">small</SelectItem>
                     <SelectItem value="medium">medium</SelectItem>
+                    <SelectItem value="large">large</SelectItem>
                   </SelectContent>
                 </Select>
               )}

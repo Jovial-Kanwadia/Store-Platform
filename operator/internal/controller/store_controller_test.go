@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	infrav1alpha1 "github.com/Jovial-Kanwadia/store-operator/api/v1alpha1"
+	"github.com/Jovial-Kanwadia/store-operator/internal/config"
 )
 
 var _ = Describe("Store Controller", func() {
@@ -73,6 +74,7 @@ var _ = Describe("Store Controller", func() {
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Recorder: record.NewFakeRecorder(10),
+				Config:   config.Load(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
